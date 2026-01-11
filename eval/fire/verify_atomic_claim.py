@@ -41,6 +41,12 @@ Instructions:
 6. The query should aim to obtain new information not already present in the 
    KNOWLEDGE, specifically helpful for verifying the STATEMENT's accuracy.
 
+IMPORTANT LANGUAGE INSTRUCTIONS:
+- Detect the language of the STATEMENT (e.g., English, Vietnamese, Chinese, etc.)
+- Your reasoning and explanation MUST be in the SAME LANGUAGE as the STATEMENT
+- The search_query MUST also be in the SAME LANGUAGE as the STATEMENT to get relevant local results
+- Only the JSON keys ("final_answer", "search_query") and values ("True", "False") remain in English
+
 KNOWLEDGE:
 {_KNOWLEDGE_PLACEHOLDER}
 
@@ -61,12 +67,18 @@ Instructions:
      "final_answer": "{_Factual_LABEL}" or "{_Non_Factual_LABEL}"
    }}
 
+IMPORTANT LANGUAGE INSTRUCTIONS:
+- Detect the language of the STATEMENT (e.g., English, Vietnamese, Chinese, etc.)
+- Your reasoning and explanation MUST be in the SAME LANGUAGE as the STATEMENT
+- Only the JSON keys and values ("True", "False") remain in English
+
 KNOWLEDGE:
 {_KNOWLEDGE_PLACEHOLDER}
 
 STATEMENT:
 {_STATEMENT_PLACEHOLDER}
 """
+
 
 
 
@@ -101,8 +113,8 @@ def call_search(
 def get_sentence_similarity(new_sent, sentences, threshold=0.9):
     if len(sentences) == 0:
         return 0
-    single_embedding  = sbert_model.encode(new_sent, convert_to_tensor=True).to(torch.device('cuda'))
-    list_embeddings = sbert_model.encode(sentences, convert_to_tensor=True).to(torch.device('cuda'))
+    single_embedding  = sbert_model.encode(new_sent, convert_to_tensor=True).to(torch.device(device))
+    list_embeddings = sbert_model.encode(sentences, convert_to_tensor=True).to(torch.device(device))
     similarities = util.cos_sim(single_embedding, list_embeddings)
 
     count_above_threshold = sum(1 for i in range(len(sentences)) if similarities[0][i].item() > threshold)
@@ -144,14 +156,18 @@ def final_answer_or_next_search(
         if len(query_history) >= tolerance - 1 and get_sentence_similarity(query_history[-1],
                                                                            query_history[-(tolerance - 1):-1],
                                                                            threshold=0.9) >= tolerance - 2:
-            full_prompt += "\nPlease note that we have detected very similar content many times in the past query history. Please pay attention to optimizing the query to make it more diverse."
+            full_prompt += "\\nPlease note that we have detected very similar content many times in the past query history. Please pay attention to optimizing the query to make it more diverse."
 
+    print(f'    🤖 Calling LLM (prompt length: {len(full_prompt)} chars)...')
     model_response, usage = model.generate(full_prompt)
+    print(f'    ✅ LLM response received (length: {len(model_response)} chars)')
 
     answer_or_next_query = utils.extract_json_from_output(model_response)
     if answer_or_next_query is None:
+        print(f'    ⚠️ Failed to parse JSON from response')
         return None, None
     elif 'final_answer' in answer_or_next_query:
+        print(f'    📋 Final answer: {answer_or_next_query["final_answer"]}')
         return FinalAnswer(response=model_response, answer=answer_or_next_query['final_answer']), usage
 
     elif 'search_query' in answer_or_next_query:

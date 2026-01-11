@@ -1,10 +1,12 @@
+import os
 import re
 import torch
 import transformers
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_anthropic import ChatAnthropic
-from common import utils
+from langchain_google_genai import ChatGoogleGenerativeAI
+from common import utils, shared_config
 
 SYS_PROMPT = 'You are a fact-checking agent responsible for verifying the accuracy of claims.'
 
@@ -48,6 +50,8 @@ class Model:
             return self._load_openai_model()
         elif self.organization == 'anthropic':
             return self._load_anthropic_model()
+        elif self.organization == 'google':
+            return self._load_google_model()
         elif self.organization == 'hf':
             return self._load_huggingface_model()
         else:
@@ -85,6 +89,22 @@ class Model:
             max_tokens=self.max_tokens
         )
 
+    def _load_google_model(self):
+        """
+        Loads the Google Gemini model.
+        
+        Returns:
+            Google Gemini model instance.
+        """
+        print('Loading Google Gemini model...')
+        api_key = os.environ.get('GOOGLE_API_KEY') or shared_config.google_api_key
+        return ChatGoogleGenerativeAI(
+            model=self.model_id,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+            google_api_key=api_key,
+        )
+
     def _load_huggingface_model(self):
         """
         Loads the Hugging Face model.
@@ -117,6 +137,8 @@ class Model:
             return self._generate_openai_response(context)
         elif self.organization == 'anthropic':
             return self._generate_anthropic_response(context)
+        elif self.organization == 'google':
+            return self._generate_google_response(context)
         elif self.organization == 'hf':
             return self._generate_huggingface_response(context)
         else:
@@ -163,6 +185,34 @@ class Model:
         
         response = self.model.invoke(messages)
         return response.content, response.response_metadata['usage']
+
+    def _generate_google_response(self, context: str) -> tuple[str, dict | None]:
+        """
+        Generates a response from Google Gemini model.
+        
+        Args:
+            context (str): Input text context.
+
+        Returns:
+            tuple:
+                str: Generated response.
+                dict: API usage metadata.
+        """
+        messages = [
+            SystemMessage(content=SYS_PROMPT),
+            HumanMessage(content=context),
+        ]
+        response = self.model.invoke(messages)
+        # LangChain Google GenAI returns usage_metadata similar to OpenAI
+        usage = response.usage_metadata if hasattr(response, 'usage_metadata') else None
+        
+        # Handle case where content might be a list (multi-part response)
+        content = response.content
+        if isinstance(content, list):
+            # Join all text parts if content is a list
+            content = ''.join([str(part) if not hasattr(part, 'text') else part.text for part in content])
+        
+        return content, usage
 
     def _generate_huggingface_response(self, context: str) -> tuple[str, dict | None]:
         """

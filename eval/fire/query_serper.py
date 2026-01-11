@@ -54,7 +54,7 @@ class SerperAPI:
       self,
       search_term: str,
       search_type: str = 'search',
-      max_retries: int = 20,
+      max_retries: int = 3,  # Reduced from 20
       **kwargs: Any,
   ) -> dict[Any, Any]:
     """Run query through Google Serper."""
@@ -68,18 +68,23 @@ class SerperAPI:
     }
     response, num_fails, sleep_time = None, 0, 0
 
+    print(f'    🔍 Searching: "{search_term[:50]}..."' if len(search_term) > 50 else f'    🔍 Searching: "{search_term}"')
+
     while not response and num_fails < max_retries:
       try:
         response = requests.post(
-            f'{_SERPER_URL}/{search_type}', headers=headers, params=params
+            f'{_SERPER_URL}/{search_type}', headers=headers, params=params,
+            timeout=30  # Add 30 second timeout
         )
+        print(f'    ✅ Search completed (status: {response.status_code})')
       except AssertionError as e:
         raise e
-      except Exception:  # pylint: disable=broad-exception-caught
+      except Exception as e:  # pylint: disable=broad-exception-caught
+        print(f'    ⚠️ Search failed (attempt {num_fails + 1}/{max_retries}): {type(e).__name__}')
         response = None
         num_fails += 1
-        sleep_time = min(sleep_time * 2, 600)
-        sleep_time = random.uniform(1, 10) if not sleep_time else sleep_time
+        sleep_time = min(sleep_time * 2, 10)  # Reduced max sleep
+        sleep_time = random.uniform(1, 3) if not sleep_time else sleep_time
         time.sleep(sleep_time)
 
     if not response:
@@ -89,52 +94,68 @@ class SerperAPI:
     search_results = response.json()
     return search_results
 
-  def _parse_snippets(self, results: dict[Any, Any]) -> list[str]:
-    """Parse results."""
-    snippets = []
+  def _parse_snippets_with_links(self, results: dict[Any, Any]) -> list[dict]:
+    """Parse results with links."""
+    items = []
 
     if results.get('answerBox'):
       answer_box = results.get('answerBox', {})
       answer = answer_box.get('answer')
       snippet = answer_box.get('snippet')
-      snippet_highlighted = answer_box.get('snippetHighlighted')
+      link = answer_box.get('link', '')
 
       if answer and isinstance(answer, str):
-        snippets.append(answer)
+        items.append({'snippet': answer, 'link': link, 'title': 'Answer Box'})
       if snippet and isinstance(snippet, str):
-        snippets.append(snippet.replace('\n', ' '))
-      if snippet_highlighted:
-        snippets.append(snippet_highlighted)
+        items.append({'snippet': snippet.replace('\n', ' '), 'link': link, 'title': 'Answer Box'})
 
     if results.get('knowledgeGraph'):
       kg = results.get('knowledgeGraph', {})
-      title = kg.get('title')
+      title = kg.get('title', '')
       entity_type = kg.get('type')
       description = kg.get('description')
+      link = kg.get('descriptionLink', kg.get('website', ''))
 
       if entity_type:
-        snippets.append(f'{title}: {entity_type}.')
+        items.append({'snippet': f'{title}: {entity_type}.', 'link': link, 'title': 'Knowledge Graph'})
 
       if description:
-        snippets.append(description)
+        items.append({'snippet': description, 'link': link, 'title': title})
 
       for attribute, value in kg.get('attributes', {}).items():
-        snippets.append(f'{title} {attribute}: {value}.')
+        items.append({'snippet': f'{title} {attribute}: {value}.', 'link': link, 'title': title})
 
     result_key = self.result_key_for_type[self.search_type]
 
     if result_key in results:
       for result in results[result_key][:self.k]:
+        title = result.get('title', 'Search Result')
+        link = result.get('link', '')
+        
         if 'snippet' in result:
-          snippets.append(result['snippet'])
+          items.append({'snippet': result['snippet'], 'link': link, 'title': title})
 
         for attribute, value in result.get('attributes', {}).items():
-          snippets.append(f'{attribute}: {value}.')
+          items.append({'snippet': f'{attribute}: {value}.', 'link': link, 'title': title})
 
-    if not snippets:
-      return [NO_RESULT_MSG]
+    if not items:
+      return [{'snippet': NO_RESULT_MSG, 'link': '', 'title': 'No Result'}]
 
-    return snippets
+    return items
+
+  def _parse_snippets(self, results: dict[Any, Any]) -> list[str]:
+    """Parse results (legacy, returns only snippets)."""
+    items = self._parse_snippets_with_links(results)
+    return [item['snippet'] for item in items]
 
   def _parse_results(self, results: dict[Any, Any]) -> str:
-    return ' '.join(self._parse_snippets(results))
+    """Parse results with links included."""
+    items = self._parse_snippets_with_links(results)
+    formatted = []
+    for item in items:
+      if item['link']:
+        formatted.append(f"{item['snippet']} [Source: {item['link']}]")
+      else:
+        formatted.append(item['snippet'])
+    return ' '.join(formatted)
+
